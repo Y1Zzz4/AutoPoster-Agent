@@ -1,0 +1,15 @@
+# Python 编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+
+# 环境变量
+.env
+
+# 产出文件
+assets/outputs/
