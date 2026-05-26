@@ -30,7 +30,11 @@ class AutoPosterPipeline:
             The path to the final rendered poster.
         """
         # 1. Initialize the global state machine
-        state = SystemState(original_document_path=input_filepath)
+        doc_name = os.path.splitext(os.path.basename(input_filepath))[0]
+        state = SystemState(
+            original_document_path=input_filepath,
+            document_name=doc_name
+        )
         
         # 2. Phase 1: Data Ingestion (Parse Document once)
         system_logger.info("=== PHASE 1: PARSING DOCUMENT ===")

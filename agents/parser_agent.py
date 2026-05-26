@@ -63,6 +63,9 @@ class ParserAgent:
                         ))
                         system_logger.info(f"Image extracted: {image_src}")
 
+                    elif child.type in ["text", "code_inline"]:
+                        current_text_buffer += child.content
+
             # 2. Text Extraction Logic (Headings and Paragraphs)
             elif token.type in ["inline", "text"] and token.content:
                 # Append the content to our buffer

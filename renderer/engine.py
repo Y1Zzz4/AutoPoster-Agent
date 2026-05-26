@@ -20,9 +20,7 @@ class RendererEngine:
         self.viewport_height = 1920
         
         # Ensure output directory exists
-        self.output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'outputs')
-        os.makedirs(self.output_dir, exist_ok=True)
-        
+        self.base_output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'outputs')
         system_logger.info("RendererEngine initialized.")
 
     async def render_poster(self, state: SystemState, is_debug: bool = False) -> str:
@@ -42,9 +40,12 @@ class RendererEngine:
             is_debug=is_debug
         )
         
+        target_dir = os.path.join(self.base_output_dir, state.document_name)
+        os.makedirs(target_dir, exist_ok=True)
+
         file_suffix = "debug" if is_debug else "clean"
         output_filename = f"poster_{state.session_id}_iter{state.current_iteration}_{file_suffix}.png"
-        output_filepath = os.path.join(self.output_dir, output_filename)
+        output_filepath = os.path.join(target_dir, output_filename)
         
         system_logger.info(f"Launching Playwright to render {file_suffix} poster...")
         
