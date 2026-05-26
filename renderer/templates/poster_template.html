@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoPoster Render</title>
+    <style>
+        /* Base Canvas Settings */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f9;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            color: #333;
+        }
+        
+        .canvas {
+            position: relative;
+            /* Dimensions typically fixed by playwright viewport */
+            width: 1080px; 
+            height: 1920px;
+            background-color: #ffffff;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        /* Generic block styling with absolute positioning */
+        .content-block {
+            position: absolute;
+            box-sizing: border-box;
+            overflow: hidden;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Image specific styling to prevent stretching */
+        .content-block img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        /* =========================================
+           DEBUG MODE STYLES 
+           不再使用 Jinja 破坏 CSS 语法，而是基于父级 Class 选择器
+           ========================================= */
+        
+        /* 只有当外层拥有 debug-mode 类时，内部的块才显示红色边框 */
+        .debug-mode .content-block {
+            border: 3px solid #ff0055 !important;
+            background-color: rgba(255, 0, 85, 0.05);
+        }
+        
+        /* Debug 水印的基础样式保持静态 */
+        .debug-badge {
+            position: absolute;
+            top: 0;
+            left: 0;
+            background-color: #ff0055;
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 2px 6px;
+            z-index: 999;
+        }
+    </style>
+</head>
+<body class="{% if is_debug %}debug-mode{% endif %}">
+    <div class="canvas">
+        {% for block in blocks %}
+            {% if block.coordinates %}
+            <div class="content-block" 
+                 id="{{ block.block_id }}"
+                 style="
+                    left: {{ block.coordinates[0] }}px; 
+                    top: {{ block.coordinates[1] }}px; 
+                    width: {{ block.coordinates[2] }}px; 
+                    height: {{ block.coordinates[3] }}px;
+                 ">
+                
+                {% if is_debug %}
+                    <div class="debug-badge">{{ block.block_id }}</div>
+                {% endif %}
+
+                {% if block.block_type == 'image' %}
+                    <img src="{{ block.content }}" alt="Block Image">
+                {% else %}
+                    <div style="font-size: 1.2rem; text-align: justify;">
+                        {{ block.content | replace('\n', '<br>') | safe }}
+                    </div>
+                {% endif %}
+
+            </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+</body>
+</html>
