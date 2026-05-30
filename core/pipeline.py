@@ -1,5 +1,4 @@
 import os
-import math
 from core.state_context import SystemState
 from agents.preprocessor_agent import PreprocessorAgent
 from agents.parser_agent import ParserAgent
@@ -46,41 +45,51 @@ class AutoPosterPipeline:
         best_cards_snapshot = []
         state.is_converged = False 
 
-        math_compression_attempts = 0
-        MAX_COMPRESSIONS = 10
+        previous_loss = float('inf')
+        patience_counter = 0
+        PATIENCE_LIMIT = 2
         
         while state.current_iteration < state.max_iterations:
-            system_logger.info(f"--- Iteration {state.current_iteration + 1}/{state.max_iterations} ---")
+            iteration_id = state.current_iteration + 1
+            system_logger.info(f"\n========== ITERATION {iteration_id}/{state.max_iterations} ==========")
             
+            system_logger.info("[Step 1] PlannerAgent calculating spatial weights...")
             await self.planner.plan_layout(state)
             
-            layout_metrics = apply_constrained_layout(
-                cards=state.cards, 
-                canvas_width=self.renderer.viewport_width, 
-                canvas_height=self.renderer.viewport_height
-            )
-            
-            is_math_overflow = layout_metrics.get("is_overflowing", False)
-            overflow_cards = layout_metrics.get("overflow_cards", [])
-            
-            if is_math_overflow and overflow_cards:
-                if math_compression_attempts < MAX_COMPRESSIONS:
-                    system_logger.warning(f"Mathematical constraint violated. Forcing semantic compression (Attempt {math_compression_attempts + 1}/{MAX_COMPRESSIONS}).")
+            # Instantaneous local discrete matrix evaluation
+            system_logger.info("[Step 2] Executing internal Rigid-Flex Cartesian Engine...")
+            while True:
+                layout_metrics = apply_constrained_layout(
+                    cards=state.cards, 
+                    canvas_width=self.renderer.viewport_width, 
+                    canvas_height=self.renderer.viewport_height
+                )
+                
+                is_math_overflow = layout_metrics.get("is_overflowing", False)
+                overflow_cards = layout_metrics.get("overflow_cards", [])
+                
+                if is_math_overflow and overflow_cards:
+                    lod_downgraded = False
+                    for cid in overflow_cards:
+                        target_card = next((c for c in state.cards if c.card_id == cid), None)
+                        # Step down the discrete gradient until Tier 3 (25%) limit
+                        if target_card and target_card.current_lod < 3:
+                            target_card.current_lod += 1
+                            self.summarizer._apply_lod_to_blocks(target_card)
+                            lod_downgraded = True
+                            system_logger.warning(f"Spatial overflow inside card {cid}. Stepping down to LOD Tier {target_card.current_lod}.")
                     
-                    state.latest_feedback = {"issues": [{"card_id": cid, "description": "Mathematical overflow"} for cid in overflow_cards]}
-                    compressed_ids = await self.summarizer.compress_overflow_card(state)
-                    
-                    if compressed_ids:
-                        for card in state.cards:
-                            if card.card_id in compressed_ids:
-                                self.summarizer._recalculate_card_weight(card)
-                    
-                    math_compression_attempts += 1
-                    continue
+                    if lod_downgraded:
+                        # Re-calculate packing metrics instantly without billing LLM/VLM tokens
+                        continue 
+                    else:
+                        system_logger.error("All conflicting regions reached minimum structural bounds (LOD Tier 3).")
+                        break
                 else:
-                    system_logger.error("Max physical compression attempts reached! Forcing layout into VLM review phase.")
+                    break # Visual boundary equilibrium established in memory
             
             # --- Normal VLM Aesthetic Review ---
+            system_logger.info("[Step 3] Rendering headless layout for VLM Review...")
             debug_img_path = await self.renderer.render_poster(state, is_debug=True)
             is_perfect = await self.critic.evaluate_layout(state, debug_img_path)
             
@@ -88,17 +97,32 @@ class AutoPosterPipeline:
             col_heights_dict = layout_metrics.get("heights", {})
             heights = list(col_heights_dict.values())
             variance = sum((h - sum(heights)/len(heights))**2 for h in heights) / len(heights) if heights else 0
+
             total_loss = (current_issues * 100000) + variance
-            
+            system_logger.info(f"[Step 4] Current Layout Loss evaluated at: {total_loss:.2f}")
+
             if total_loss < min_loss:
                 min_loss = total_loss
                 best_cards_snapshot = [card.model_copy(deep=True) for card in state.cards]
+                system_logger.info("Checkpoint updated with new minimum loss.")
             
-            if is_perfect:
+            loss_diff = abs(previous_loss - total_loss)
+            if loss_diff < 1.0:
+                patience_counter += 1
+                system_logger.info(f"  -> [Early Stopping] Loss stabilized. Patience: {patience_counter}/{PATIENCE_LIMIT}")
+            else:
+                patience_counter = 0
+                
+            previous_loss = total_loss
+            
+            if is_perfect or patience_counter >= PATIENCE_LIMIT:
                 state.is_converged = True 
+                if not is_perfect:
+                    system_logger.info("  -> [Early Stopping] Triggered: Spatial geometry has converged. No further optimization is physically possible.")
                 break
                             
             state.current_iteration += 1
+            system_logger.info(f"=========================================\n")
             
         # --- CONCLUSION LOGIC ---
         if state.is_converged:

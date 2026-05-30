@@ -1,123 +1,100 @@
 import math
-from core.state_context import SystemState
+import asyncio
+from core.state_context import SystemState, ContentBlock, PosterCard
 from utils.api_client import api_client
 from utils.logger import system_logger
 
 class SummarizerAgent:
     """
-    Handles both initial long-text compression and dynamic overflow compression.
+    Pre-computes and bakes a 4-tier Semantic Level of Detail (LOD) matrix 
+    concurrently to eliminate runtime LLM bottlenecks.
     """
     def __init__(self):
         self.llm = api_client.planner_client
-        self.model_name = "deepseek-v4-pro"
+        self.model_name = "deepseek-chat"
 
     async def execute_summary(self, state: SystemState) -> None:
-        """
-        Initial pass: Compresses excessively long academic text blocks into bullet points.
-        """
-        system_logger.info("SummarizerAgent evaluating text blocks for P2P conversion...")
+        system_logger.info("SummarizerAgent baking 4-tier Semantic LODs (100%, 75%, 50%, 25%) concurrently...")
         
+        tasks = []
         for card in state.cards:
-            has_modified = False
-            for block in card.blocks:
-                if block.block_type == "text" and len(block.content) > 800:
-                    sys_prompt = (
-                        "You are an academic editor creating a Paper-to-Poster (P2P) layout. "
-                        "Your objective is to condense the provided text into 3-4 highly readable bullet points. "
-                        "Rules: \n"
-                        "1. Preserve ALL mathematical metrics, percentages, and core methodologies.\n"
-                        "2. Total length must not exceed 100 words.\n"
-                        "3. Format the output STRICTLY as raw HTML using <ul> and <li> tags.\n"
-                        "Do NOT wrap the output in markdown code blocks."
-                    )
-                    
-                    try:
-                        response = await self.llm.chat.completions.create(
-                            model=self.model_name,
-                            messages=[
-                                {"role": "system", "content": sys_prompt},
-                                {"role": "user", "content": block.content}
-                            ],
-                            temperature=0.1 
-                        )
-                        
-                        block.content = response.choices[0].message.content.strip()
-                        has_modified = True
-                        system_logger.info(f"Summarized block inside card '{card.title}' into bullet points.")
-                        
-                    except Exception as e:
-                        system_logger.error(f"Failed to summarize block in card {card.card_id}: {str(e)}")
+            text_blocks = [b for b in card.blocks if b.block_type == "text"]
+            if not text_blocks:
+                continue
             
-            if has_modified:
-                self._recalculate_card_weight(card)
-
-        system_logger.info("SummarizerAgent execution completed.")
-
-    async def compress_overflow_card(self, state: SystemState) -> list:
-        """
-        Dynamic pass: Triggered by CriticAgent when a card physically overflows its boundaries.
-        Returns a list of card IDs that were successfully compressed.
-        """
-        if not state.latest_feedback or "issues" not in state.latest_feedback:
-            return []
-
-        overflow_card_ids = set()
-        for issue in state.latest_feedback["issues"]:
-            desc = issue.get("description", "").lower()
-            if "overflow" in desc or "cut off" in desc or "clip" in desc:
-                c_id = issue.get("card_id")
-                if c_id and c_id != "unknown":
-                    overflow_card_ids.add(c_id)
-
-        if not overflow_card_ids:
-            return []
-
-        compressed_ids = []
+            # Formulate Level 0 (100% Raw Text)
+            base_text = "\n\n".join(b.content for b in text_blocks)
+            card.text_lods[0] = base_text
+            card.current_lod = 0
+            
+            # Pre-bake compressed tiers only for content-heavy cards
+            if len(base_text) > 250:
+                tasks.append(self._generate_all_lods(card, base_text))
+            else:
+                card.text_lods[1] = base_text
+                card.text_lods[2] = base_text
+                card.text_lods[3] = base_text
+                
+        if tasks:
+            await asyncio.gather(*tasks)
+            
+        # Synchronize Initial Mathematical Weights
         for card in state.cards:
-            if card.card_id in overflow_card_ids:
-                text_blocks = [b for b in card.blocks if b.block_type == "text"]
-                if not text_blocks:
-                    continue
+            self._apply_lod_to_blocks(card)
+            
+        system_logger.info("4-tier Semantic LOD pre-computation complete.")
 
-                # Target the longest text block to maximize space recovery
-                target_block = max(text_blocks, key=lambda b: len(b.content))
+    async def _generate_all_lods(self, card: PosterCard, base_text: str):
+        # Tier 1 Prompt (~75% Length)
+        p1 = (
+            "Compress this academic text. Retain almost all details, core metrics, and formulas, "
+            "but remove verbose transitions and redundant adverbs. Format as HTML (`<p>` or `<ul><li>`). "
+            "Reduce total length to exactly 70-80% of the original."
+        )
+        # Tier 2 Prompt (~50% Length)
+        p2 = (
+            "Compress this academic text into 3-4 highly readable HTML bullet points (`<ul><li>`). "
+            "Keep core metrics but remove transitional fluff. Reduce length to exactly 40-50% of the original."
+        )
+        # Tier 3 Prompt (~25% Length)
+        p3 = (
+            "Extremely compress this text into 2 concise HTML bullet points (`<ul><li>`). "
+            "ONLY keep the absolute final results, critical methodology names, and math formulas. "
+            "Reduce length to exactly 20-25% of the original."
+        )
 
-                sys_prompt = (
-                    "You are an academic editor. The current text overflows its physical poster container. "
-                    "Compress the provided text to reduce its total character length by at least 30%. "
-                    "Retain core metrics and mathematical formulas. "
-                    "Output ONLY the compressed text in HTML format (use <ul>/<li> or <p>)."
+        async def fetch_tier(prompt: str) -> str:
+            try:
+                resp = await self.llm.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "system", "content": prompt}, {"role": "user", "content": base_text}],
+                    temperature=0.1
                 )
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                system_logger.error(f"LOD generation tier failed: {e}")
+                return base_text
 
-                try:
-                    response = await self.llm.chat.completions.create(
-                        model=self.model_name,
-                        messages=[
-                            {"role": "system", "content": sys_prompt},
-                            {"role": "user", "content": target_block.content}
-                        ],
-                        temperature=0.1
-                    )
-                    target_block.content = response.choices[0].message.content.strip()
-                    compressed_ids.append(card.card_id)
-                    system_logger.info(f"Dynamically compressed overflowed text for card: {card.card_id}")
-                except Exception as e:
-                    system_logger.error(f"Dynamic compression failed for card {card.card_id}: {str(e)}")
-                    
-        return compressed_ids
+        l1, l2, l3 = await asyncio.gather(fetch_tier(p1), fetch_tier(p2), fetch_tier(p3))
+        card.text_lods[1] = l1
+        card.text_lods[2] = l2
+        card.text_lods[3] = l3
 
-    def _recalculate_card_weight(self, card) -> None:
+    def _apply_lod_to_blocks(self, card: PosterCard) -> None:
         """
-        Mathematically synchronizes the token_weight with the Constrained Layout engine's 
-        Bottom-Up Rigid Modeling formula to prevent layout coordinate oscillations.
+        Updates text content and resynchronizes rigid-flex layout metrics.
         """
-        text_len = sum(len(b.content) for b in card.blocks if b.block_type == 'text')
+        card.blocks = [b for b in card.blocks if b.block_type != "text"]
+        current_text = card.text_lods.get(card.current_lod, "")
+        
+        if current_text:
+            card.blocks.insert(0, ContentBlock(block_type="text", content=current_text))
+            
+        text_len = len(current_text)
         img_count = sum(1 for b in card.blocks if b.block_type == 'image')
         title_lines = math.ceil(len(card.title) / 25.0)
+        list_items = current_text.count('<li>')
         
-        est_text_h = math.ceil(text_len / 45.0) * 32.0
-        est_title_h = title_lines * 40.0
-        est_img_h = img_count * 380.0
-        
-        # 80.0 represents the strict padding_base defined in the layout engine
-        card.token_weight = 80.0 + est_title_h + est_text_h + est_img_h
+        # Rigidity mathematical estimation formula
+        rigid_h = 80.0 + (title_lines * 40.0) + (math.ceil(text_len / 45.0) * 32.0) + (list_items * 15.0)
+        card.token_weight = rigid_h + (img_count * 380.0)

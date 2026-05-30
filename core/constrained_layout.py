@@ -3,6 +3,10 @@ from typing import List, Dict, Any
 from core.state_context import PosterCard
 
 def apply_constrained_layout(cards: List[PosterCard], canvas_width: float, canvas_height: float) -> Dict[str, Any]:
+    """
+    Executes a rigid-flex geometrical mapping. 
+    Protects text blocks from vertical compression and flags structural overflow card IDs.
+    """
     if not cards:
         return {"heights": {}, "is_overflowing": False, "overflow_cards": []}
 
@@ -26,24 +30,25 @@ def apply_constrained_layout(cards: List[PosterCard], canvas_width: float, canva
     padding_base = 80.0 
     base_img_h = 380.0
     
-    # dictionary
     metrics = {}
 
-    # --- 1. culmulate Rigid and Flex height ---
+    # --- Step 1: Rigid vs Flex Height Decomposition ---
     for card in body_cards:
-        text_len = sum(len(b.content) for b in card.blocks if b.block_type == 'text')
+        text_blocks = [b for b in card.blocks if b.block_type == 'text']
+        text_content = text_blocks[0].content if text_blocks else ""
         img_count = sum(1 for b in card.blocks if b.block_type == 'image')
-    
-        list_items = sum(b.content.count('<li>') for b in card.blocks if b.block_type == 'text')
+        
+        list_items = text_content.count('<li>')
         title_lines = math.ceil(len(card.title) / 25.0) 
         
-        rigid_h = padding_base + (title_lines * 40.0) + (math.ceil(text_len / 45.0) * 32.0) + (list_items * 15.0)
+        # Text and containers hold absolute visual rigidity
+        rigid_h = padding_base + (title_lines * 40.0) + (math.ceil(len(text_content) / 45.0) * 32.0) + (list_items * 15.0)
         flex_h = img_count * base_img_h 
         
         metrics[card.card_id] = {"rigid": rigid_h, "flex": flex_h}
         card.token_weight = rigid_h + flex_h
 
-    # --- 2. col、row ---
+    # --- Step 2: Spatial Anchor Locking ---
     if not any(c.is_zone_locked for c in body_cards):
         total_estimated_h = sum(c.token_weight for c in body_cards)
         target_bucket_h = total_estimated_h / 3.0
@@ -65,7 +70,7 @@ def apply_constrained_layout(cards: List[PosterCard], canvas_width: float, canva
             target_col = card.zone_id if card.zone_id in buckets else "left_col"
             buckets[target_col].append(card)
 
-    # --- 3. Rigid-Flex Mapping ---
+    # --- Step 3: Geometrical Compaction & Violation Detection ---
     usable_col_h = canvas_height - header_h
     col_x_offsets = {"left_col": 0.0, "mid_col": col_w, "right_col": col_w * 2}
     actual_col_heights = {"left_col": 0.0, "mid_col": 0.0, "right_col": 0.0}
@@ -89,7 +94,7 @@ def apply_constrained_layout(cards: List[PosterCard], canvas_width: float, canva
         if col_total_h > usable_col_h:
             overflow_amount = col_total_h - usable_col_h
             
-            # judgement
+            # If images cannot absorb the overflow budget, throw a mathematical overflow
             if overflow_amount > col_flex_h * 0.8:
                 is_math_overflow = True
                 heaviest_card = max(col_cards, key=lambda c: metrics[c.card_id]["rigid"])
@@ -97,7 +102,7 @@ def apply_constrained_layout(cards: List[PosterCard], canvas_width: float, canva
                 flex_scale = 0.2 if col_flex_h > 0 else 1.0
                 global_scale = usable_col_h / col_total_h 
             else:
-                # only compress height
+                # Soft overflow: Flexibly squash image footprints safely
                 flex_scale = (col_flex_h - overflow_amount) / col_flex_h
         
         for card in col_cards:

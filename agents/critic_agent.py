@@ -59,13 +59,15 @@ class CriticAgent:
             if not issues:
                 is_perfect = True
 
-            if state.latest_feedback and "issues" in state.latest_feedback:
-                state.latest_feedback["issues"].extend(issues)
+            state.latest_feedback = {"issues": issues}
+
+            if is_perfect:
+                system_logger.info("[VLM Critic] Evaluation complete. Layout deemed perfect with 0 structural issues.")
             else:
-                state.latest_feedback = {"issues": issues}
+                system_logger.info(f"[VLM Critic] Evaluation complete. Identified {len(issues)} academic emphasis issue(s) requiring layout adjustment.")
 
             return is_perfect
-
+        
         except Exception as e:
             system_logger.error(f"CriticAgent evaluation failed: {str(e)}")
             return False
