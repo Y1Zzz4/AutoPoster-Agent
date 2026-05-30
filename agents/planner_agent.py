@@ -38,14 +38,16 @@ class PlannerAgent:
 
         # 2. Construct the intelligent prompt
         system_prompt = (
-            "You are an expert graphic design AI orchestrating a Poster layout. "
-            "You will be given a list of ContentBlocks. Your task is to output a JSON object "
-            "that defines the 'reading order' and 'spatial importance' of these blocks.\n\n"
+            "You are an expert academic poster designer. Your task is to assign each ContentBlock "
+            "to a specific physical zone on the poster, and determine its vertical weight.\n\n"
             "Rules:\n"
-            "1. Output a strictly valid JSON object with a key 'layout_plan' containing a list of objects.\n"
-            "2. Each object must have 'block_id', 'reasoning' (why you placed it here), "
-            "and 'weight_multiplier' (float, default 1.0. Increase if the block needs more physical space on the poster).\n"
-            "3. The order of the list determines how the BSP algorithm will group them visually (items adjacent in the list will be grouped together)."
+            "1. Output strictly valid JSON with a key 'layout_plan' containing a list of objects.\n"
+            "2. Each object MUST have 'block_id', 'zone_id', and 'weight_multiplier' (float, default 1.0).\n"
+            "3. 'zone_id' MUST be exactly one of the following:\n"
+            "   - 'header': STRICTLY for the main Title and Authors.\n"
+            "   - 'left_col': For Abstract, Introduction, Methodology.\n"
+            "   - 'right_col': For Experimental Results, Images, Charts, Conclusion.\n"
+            "4. Keep related text and their corresponding images in the SAME 'zone_id' so they render together."
         )
 
         user_prompt = f"Here are the document blocks:\n{json.dumps(blocks_data, indent=2)}\n"
@@ -96,6 +98,7 @@ class PlannerAgent:
         for item in layout_list:
             b_id = item.get("block_id")
             multiplier = float(item.get("weight_multiplier", 1.0))
+            assigned_zone = item.get("zone_id", "left_col")
             
             if b_id in block_map:
                 block = block_map[b_id]

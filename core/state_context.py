@@ -10,6 +10,7 @@ class ContentBlock(BaseModel):
     block_type: str = Field(description="Type of content: 'text', 'image', or 'title'")
     content: str = Field(description="The actual text content or image path")
     token_weight: float = Field(default=1.0, description="Relative importance/size of this block")
+    zone_id: str = Field(default="left_col", description="Layout zone: 'header', 'left_col', or 'right_col'")
     
     # Spatial coordinates [x, y, width, height], initialized as None
     coordinates: Optional[List[float]] = Field(default=None, description="Absolute coordinates in pixels")
@@ -28,7 +29,7 @@ class SystemState(BaseModel):
     
     # Iteration control for the feedback loop
     current_iteration: int = Field(default=0)
-    max_iterations: int = Field(default=3)
+    max_iterations: int = Field(default=5)
     
     # Critic's feedback payload
     latest_feedback: Optional[Dict[str, Any]] = Field(default=None)

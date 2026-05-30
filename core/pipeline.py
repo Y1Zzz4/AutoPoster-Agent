@@ -1,10 +1,11 @@
 import os
 from core.state_context import SystemState
 from agents.parser_agent import ParserAgent
+from agents.summarizer_agent import SummarizerAgent
 from agents.planner_agent import PlannerAgent
 from agents.critic_agent import CriticAgent
 from renderer.engine import RendererEngine
-from core.bsp_algorithm import apply_bsp_layout
+from core.constrained_layout import apply_constrained_layout
 from utils.logger import system_logger
 
 class AutoPosterPipeline:
@@ -14,6 +15,7 @@ class AutoPosterPipeline:
     """
     def __init__(self):
         self.parser = ParserAgent()
+        self.summarizer = SummarizerAgent()
         self.planner = PlannerAgent()
         self.renderer = RendererEngine()
         self.critic = CriticAgent()
@@ -36,12 +38,16 @@ class AutoPosterPipeline:
             document_name=doc_name
         )
         
-        # 2. Phase 1: Data Ingestion (Parse Document once)
+        # 2. Data Ingestion (Parse Document once)
         system_logger.info("=== PHASE 1: PARSING DOCUMENT ===")
         state.content_blocks = self.parser.parse_markdown(input_filepath)
         
-        # 3. The Grand Closed-Loop (Feedback Loop)
-        system_logger.info("=== PHASE 2 & 3 & 4: PLANNING, RENDERING & REVIEW ===")
+        # 3.Summarize
+        system_logger.info("=== PHASE 2: SUMMARIZING LONG TEXTS ===")
+        await self.summarizer.execute_summary(state)
+
+        # 4. The Grand Closed-Loop (Feedback Loop)
+        system_logger.info("=== PHASE 3 & 4 & 5: PLANNING, RENDERING & REVIEW ===")
         
         while state.current_iteration < state.max_iterations:
             system_logger.info(f"--- Starting Iteration {state.current_iteration + 1}/{state.max_iterations} ---")
@@ -50,7 +56,7 @@ class AutoPosterPipeline:
             await self.planner.plan_layout(state)
             
             # Step B: Mathematical algorithm calculates exact pixel coordinates
-            apply_bsp_layout(
+            apply_constrained_layout(
                 blocks=state.content_blocks, 
                 canvas_width=self.renderer.viewport_width, 
                 canvas_height=self.renderer.viewport_height
