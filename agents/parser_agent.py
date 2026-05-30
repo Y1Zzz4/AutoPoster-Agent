@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import base64
 import mimetypes
@@ -82,6 +83,21 @@ class ParserAgent:
 
             elif token.type == "heading_close":
                 is_inside_heading = False
+
+            elif token.type in ["html_block", "html_inline"]:
+                img_match = re.search(r'<img[^>]+src=["\'](.*?)["\']', token.content, re.IGNORECASE)
+                if img_match:
+                    if current_text_buffer.strip():
+                        current_section["blocks"].append(ContentBlock(block_type="text", content=current_text_buffer.strip()))
+                        current_text_buffer = "" 
+                    
+                    raw_image_src = img_match.group(1)
+                    base64_src = self._encode_local_image(raw_image_src, filepath)
+                    if base64_src:
+                        current_section["blocks"].append(ContentBlock(block_type="image", content=base64_src))
+                else:
+                    if not is_inside_heading:
+                        current_text_buffer += token.content
 
             elif token.type == "inline" and not is_inside_heading and token.children:
                 for child in token.children:

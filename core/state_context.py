@@ -29,6 +29,8 @@ class PosterCard(BaseModel):
     current_lod: int = 0  
     text_lods: Dict[int, str] = {}
 
+    custom_styles: Dict[str, str] = Field(default_factory=dict)
+
 class SystemState(BaseModel):
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     original_document_path: str
