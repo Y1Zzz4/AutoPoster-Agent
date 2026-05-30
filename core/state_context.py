@@ -18,17 +18,17 @@ class PosterCard(BaseModel):
     title: str = Field(default="Section")
     blocks: List[ContentBlock] = Field(default_factory=list)
     
-    # Card physical properties
-    token_weight: float = Field(default=0.0)
-    zone_id: str = Field(default="")
-    is_zone_locked: bool = Field(default=False)
-    coordinates: Optional[List[float]] = Field(default=None)
-
     # Semantic LOD System: 
     # 0: 100% (Raw), 1: 75% (Minor trim), 2: 50% (Bullets), 3: 25% (Extreme keywords)
     current_lod: int = 0  
     text_lods: Dict[int, str] = {}
 
+    # Card physical properties
+    token_weight: float = Field(default=0.0)
+    zone_id: str = Field(default="")
+    is_zone_locked: bool = Field(default=False)
+    coordinates: Optional[List[float]] = Field(default=None)
+    scale_factor: float = 1.0
     custom_styles: Dict[str, str] = Field(default_factory=dict)
 
 class SystemState(BaseModel):

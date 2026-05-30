@@ -1,4 +1,5 @@
 import math
+import re
 import asyncio
 from core.state_context import SystemState, ContentBlock, PosterCard
 from utils.api_client import api_client
@@ -11,7 +12,7 @@ class SummarizerAgent:
     """
     def __init__(self):
         self.llm = api_client.planner_client
-        self.model_name = "deepseek-chat"
+        self.model_name = "deepseek-v4-pro"
 
     async def execute_summary(self, state: SystemState) -> None:
         system_logger.info("SummarizerAgent baking 4-tier Semantic LODs (100%, 75%, 50%, 25%) concurrently...")
@@ -21,12 +22,11 @@ class SummarizerAgent:
             text_blocks = [b for b in card.blocks if b.block_type == "text"]
             if not text_blocks:
                 continue
-            
-            # Formulate Level 0 (100% Raw Text)
+                
             base_text = "\n\n".join(b.content for b in text_blocks)
             card.text_lods[0] = base_text
             card.current_lod = 0
-            
+
             # Pre-bake compressed tiers only for content-heavy cards
             if len(base_text) > 250:
                 tasks.append(self._generate_all_lods(card, base_text))
@@ -45,24 +45,10 @@ class SummarizerAgent:
         system_logger.info("4-tier Semantic LOD pre-computation complete.")
 
     async def _generate_all_lods(self, card: PosterCard, base_text: str):
-        # Tier 1 Prompt (~75% Length)
-        p1 = (
-            "Compress this academic text. Retain almost all details, core metrics, and formulas, "
-            "but remove verbose transitions and redundant adverbs. Format as HTML (`<p>` or `<ul><li>`). "
-            "Reduce total length to exactly 70-80% of the original."
-        )
-        # Tier 2 Prompt (~50% Length)
-        p2 = (
-            "Compress this academic text into 3-4 highly readable HTML bullet points (`<ul><li>`). "
-            "Keep core metrics but remove transitional fluff. Reduce length to exactly 40-50% of the original."
-        )
-        # Tier 3 Prompt (~25% Length)
-        p3 = (
-            "Extremely compress this text into 2 concise HTML bullet points (`<ul><li>`). "
-            "ONLY keep the absolute final results, critical methodology names, and math formulas. "
-            "Reduce length to exactly 20-25% of the original."
-        )
-
+        p1 = "Compress this academic text. Retain almost all details, core metrics, and formulas, but remove verbose transitions. Format as HTML (`<p>` or `<ul><li>`). Reduce total length to exactly 70-80%."
+        p2 = "Compress this academic text into 3-4 highly readable HTML bullet points (`<ul><li>`). Keep core metrics. Reduce length to exactly 40-50%."
+        p3 = "Extremely compress this text into 2 concise HTML bullet points (`<ul><li>`). ONLY keep the absolute final results and formulas. Reduce length to exactly 20-25%."
+        
         async def fetch_tier(prompt: str) -> str:
             try:
                 resp = await self.llm.chat.completions.create(

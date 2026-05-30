@@ -11,90 +11,86 @@ class PlannerAgent:
     """
     def __init__(self):
         self.llm = api_client.planner_client
-        self.model_name = "deepseek-chat"
+        self.model_name = "deepseek-v4-pro"
 
     def _ensure_safe_css(self, styles: Dict[str, str]) -> Dict[str, str]:
-        """
-        Defensive programming contract: Ensures injected CSS does not violate 
-        the rigid-flex geometrical constraints calculated by the Cartesian engine.
-        """
         safe_styles = {}
-        # 仅允许视觉修饰类属性，严禁注入尺寸、边距等物理属性
-        allowed_properties = {
-            'background-color', 'color', 'border', 'border-left', 
-            'border-bottom', 'border-top', 'border-right', 
-            'box-shadow', 'font-weight', 'border-radius'
-        }
-        
-        if not isinstance(styles, dict):
-            return safe_styles
-            
-        for k, v in styles.items():
-            k_lower = k.lower().strip()
-            if k_lower in allowed_properties:
-                safe_styles[k_lower] = str(v).replace(';', '') # 净化输入
+        allowed_properties = {'background-color', 'color', 'font-weight'}
+        if isinstance(styles, dict):
+            for k, v in styles.items():
+                k_lower = k.lower().strip()
+                if k_lower in allowed_properties:
+                    safe_styles[k_lower] = str(v).replace(';', '')
         return safe_styles
 
     async def plan_layout(self, state: SystemState) -> None:
-        system_logger.info(f"[PlannerAgent] Computing spatial and stylistic mapping for Iteration {state.current_iteration + 1}.")
+        system_logger.info(f"[PlannerAgent] Computing spatial weights, CSS, and Semantic Pagination.")
 
         cards_data = [
-            {"card_id": c.card_id, "title": c.title, "current_weight": c.token_weight}
-            for c in state.cards
+            {"card_id": c.card_id, "title": c.title, "current_weight": c.token_weight, "current_zone": c.zone_id}
+            for c in state.cards[1:]
         ]
 
         sys_prompt = (
-            "You are an expert academic poster Art Director. Your task is to determine the spatial importance "
-            "and visual salience for each semantic card based on the Scientific Editor's feedback.\n\n"
-            "Rules:\n"
-            "1. Output strictly valid JSON with a key 'layout_plan' containing a list of objects.\n"
-            "2. Each object MUST have:\n"
-            "   - 'card_id' (string)\n"
-            "   - 'weight_multiplier' (float, default 1.0. Adjust up/down based on spatial feedback).\n"
-            "   - 'custom_styles' (JSON object). Use ONLY these CSS properties to highlight core contributions: "
-            "     background-color (e.g., '#f8f9fa' or '#fff0f0'), border-left (e.g., '4px solid #d32f2f'), box-shadow.\n"
-            "3. If the Critic reports that a core result lacks visual salience, inject a highlight style for that specific card.\n"
-            "4. DO NOT output any physical CSS like height, width, margin, or padding."
+            "You are an expert academic poster Art Director. You decide spatial weights, styles, and COLUMN ALLOCATION.\n\n"
+            "Rules for 'layout_plan' JSON objects:\n"
+            "1. 'card_id': strictly matching the input.\n"
+            "2. 'zone_id': You MUST assign each card to 'left_col', 'mid_col', or 'right_col'.\n"
+            "   CRITICAL: The academic reading flow MUST be monotonic. Cards must flow strictly from left to right. "
+            "   (e.g., Abstract in left, Method in mid, Results in right).\n"
+            "3. 'weight_multiplier': float (default 1.0).\n"
+            "4. 'custom_styles': JSON object for highlighting.\n"
         )
 
-        user_prompt = f"Current Semantic Cards:\n{json.dumps(cards_data, indent=2)}\n"
+        user_prompt = f"Semantic Cards:\n{json.dumps(cards_data, indent=2)}\n"
 
         if state.current_iteration > 0 and state.latest_feedback:
             user_prompt += (
-                f"\nCRITICAL MULTI-MODAL FEEDBACK from Scientific Editor:\n"
+                f"\nCRITICAL FEEDBACK from Scientific Editor:\n"
                 f"{json.dumps(state.latest_feedback, indent=2)}\n"
-                "Apply appropriate 'weight_multiplier' and 'custom_styles' to resolve these issues."
+                "Re-allocate 'zone_id' or adjust weights/styles to resolve pagination and visual issues."
             )
 
         try:
             response = await self.llm.chat.completions.create(
                 model=self.model_name,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.2
             )
 
             plan_json = json.loads(response.choices[0].message.content)
             layout_plan = plan_json.get("layout_plan", [])
+            
+            zone_mapping = {plan.get("card_id"): plan.get("zone_id", "left_col") for plan in layout_plan}
+            
+            # Monotonicity Enforcement
+            valid_zones = {"left_col": 0, "mid_col": 1, "right_col": 2}
+            reverse_zones = {0: "left_col", 1: "mid_col", 2: "right_col"}
+            current_z_val = 0
+            
+            for card in state.cards:
+                if card.zone_id == "header":
+                    continue
+                    
+                target_zone = zone_mapping.get(card.card_id, "left_col")
+                z_val = valid_zones.get(target_zone, current_z_val)
+                
+                if z_val < current_z_val:
+                    z_val = current_z_val
+                current_z_val = z_val
+                
+                card.zone_id = reverse_zones[z_val]
 
             for plan in layout_plan:
                 cid = plan.get("card_id")
                 target_card = next((c for c in state.cards if c.card_id == cid), None)
                 if target_card:
-                    # 1. Spatial weight update
-                    multiplier = float(plan.get("weight_multiplier", 1.0))
-                    multiplier = max(0.5, min(multiplier, 2.0))
+                    multiplier = max(0.5, min(float(plan.get("weight_multiplier", 1.0)), 2.0))
                     target_card.token_weight *= multiplier
-                    
-                    # 2. Stylistic injection with defensive sanitization
-                    raw_styles = plan.get("custom_styles", {})
-                    target_card.custom_styles = self._ensure_safe_css(raw_styles)
-                    
-                    if target_card.custom_styles:
-                        system_logger.info(f"  -> Applied stylistic injection to '{target_card.title}': {target_card.custom_styles}")
+                    target_card.custom_styles = self._ensure_safe_css(plan.get("custom_styles", {}))
 
         except Exception as e:
-            system_logger.error(f"[PlannerAgent] LLM parsing failed: {str(e)}. Retaining current state.")
+            system_logger.error(f"[PlannerAgent] LLM parsing failed: {str(e)}.")
+            for card in state.cards:
+                if card.zone_id == "unassigned": card.zone_id = "left_col"
