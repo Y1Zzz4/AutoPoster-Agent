@@ -11,7 +11,7 @@ class PlannerAgent:
     """
     def __init__(self):
         self.llm = api_client.planner_client
-        self.model_name = "deepseek-chat"
+        self.model_name = "deepseek-v4-pro"
 
     async def plan_layout(self, state: SystemState) -> None:
         system_logger.info(f"Iteration {state.current_iteration}: Requesting layout plan from LLM.")

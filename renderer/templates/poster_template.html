@@ -115,5 +115,26 @@
             }
         });
     </script>
+
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        const cards = document.querySelectorAll('.poster-card');
+        cards.forEach(card => {
+            if (card.scrollHeight > card.clientHeight) {
+                const textElements = card.querySelectorAll('.text-block, ul, li, p');
+                let currentSize = 1.1;
+                
+                // ensure readable
+                while (card.scrollHeight > card.clientHeight && currentSize > 0.85) {
+                    currentSize -= 0.02;
+                    textElements.forEach(el => {
+                        el.style.fontSize = currentSize + 'rem';
+                        el.style.lineHeight = (currentSize * 1.4) + 'rem';
+                    });
+                }
+            }
+        });
+    });
+    </script>
 </body>
 </html>

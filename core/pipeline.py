@@ -45,6 +45,9 @@ class AutoPosterPipeline:
         min_loss = float('inf')
         best_cards_snapshot = []
         state.is_converged = False 
+
+        math_compression_attempts = 0
+        MAX_COMPRESSIONS = 10
         
         while state.current_iteration < state.max_iterations:
             system_logger.info(f"--- Iteration {state.current_iteration + 1}/{state.max_iterations} ---")
@@ -57,25 +60,32 @@ class AutoPosterPipeline:
                 canvas_height=self.renderer.viewport_height
             )
             
+            is_math_overflow = layout_metrics.get("is_overflowing", False)
+            overflow_cards = layout_metrics.get("overflow_cards", [])
+            
+            if is_math_overflow and overflow_cards:
+                if math_compression_attempts < MAX_COMPRESSIONS:
+                    system_logger.warning(f"Mathematical constraint violated. Forcing semantic compression (Attempt {math_compression_attempts + 1}/{MAX_COMPRESSIONS}).")
+                    
+                    state.latest_feedback = {"issues": [{"card_id": cid, "description": "Mathematical overflow"} for cid in overflow_cards]}
+                    compressed_ids = await self.summarizer.compress_overflow_card(state)
+                    
+                    if compressed_ids:
+                        for card in state.cards:
+                            if card.card_id in compressed_ids:
+                                self.summarizer._recalculate_card_weight(card)
+                    
+                    math_compression_attempts += 1
+                    continue
+                else:
+                    system_logger.error("Max physical compression attempts reached! Forcing layout into VLM review phase.")
+            
+            # --- Normal VLM Aesthetic Review ---
             debug_img_path = await self.renderer.render_poster(state, is_debug=True)
             is_perfect = await self.critic.evaluate_layout(state, debug_img_path)
             
-            # --- Inject Layout Mathematical Violations ---
-            col_heights_dict = layout_metrics.get("heights", {})
-            squashed_cards = layout_metrics.get("squashed_cards", [])
-            
-            if squashed_cards:
-                is_perfect = False
-                if not state.latest_feedback:
-                    state.latest_feedback = {"issues": []}
-                for sid in squashed_cards:
-                    state.latest_feedback["issues"].append({
-                        "card_id": sid,
-                        "description": "Image spatial equilibrium violated. Clip compensation required to preserve legibility."
-                    })
-            
-            # --- Aesthetic & Structural Loss Calculation ---
             current_issues = len(state.latest_feedback.get("issues", [])) if state.latest_feedback else 0
+            col_heights_dict = layout_metrics.get("heights", {})
             heights = list(col_heights_dict.values())
             variance = sum((h - sum(heights)/len(heights))**2 for h in heights) / len(heights) if heights else 0
             total_loss = (current_issues * 100000) + variance
@@ -83,25 +93,10 @@ class AutoPosterPipeline:
             if total_loss < min_loss:
                 min_loss = total_loss
                 best_cards_snapshot = [card.model_copy(deep=True) for card in state.cards]
-                system_logger.info(f"Checkpoint Saved: Best state updated (Loss: {total_loss:.2f})")
             
             if is_perfect:
                 state.is_converged = True 
                 break
-                
-            # --- Dynamic Semantic Compression Hook ---
-            issues = state.latest_feedback.get("issues", []) if state.latest_feedback else []
-            has_overflow = any("overflow" in i.get("description", "").lower() or "clip" in i.get("description", "").lower() for i in issues)
-            
-            if has_overflow:
-                system_logger.info("Overflow detected. Triggering semantic compression on specific cards.")
-                compressed_ids = await self.summarizer.compress_overflow_card(state)
-                
-                # Resynchronize physical weight only for the modified cards
-                if compressed_ids:
-                    for card in state.cards:
-                        if card.card_id in compressed_ids:
-                            self.summarizer._recalculate_card_weight(card)
                             
             state.current_iteration += 1
             

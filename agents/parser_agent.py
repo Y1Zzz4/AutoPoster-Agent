@@ -21,7 +21,7 @@ class ParserAgent:
         self.md = MarkdownIt()
         # Reusing planner client for logical structural grouping
         self.llm = api_client.planner_client 
-        self.model_name = "deepseek-chat"
+        self.model_name = "deepseek-v4-pro"
         system_logger.info("Neuro-Symbolic ParserAgent initialized.")
 
     def _encode_local_image(self, image_path: str, md_filepath: str) -> str:

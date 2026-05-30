@@ -9,7 +9,7 @@ class PreprocessorAgent:
     """
     def __init__(self):
         self.llm = api_client.planner_client
-        self.model_name = "deepseek-chat"
+        self.model_name = "deepseek-v4-pro"
         self.target_word_count = 800
 
     async def compress_document(self, filepath: str) -> str:
