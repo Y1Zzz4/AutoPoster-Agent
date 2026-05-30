@@ -1,6 +1,7 @@
 import os
 import math
 from core.state_context import SystemState
+from agents.preprocessor_agent import PreprocessorAgent
 from agents.parser_agent import ParserAgent
 from agents.summarizer_agent import SummarizerAgent
 from agents.planner_agent import PlannerAgent
@@ -15,6 +16,7 @@ class AutoPosterPipeline:
     and dynamic semantic recovery.
     """
     def __init__(self):
+        self.preprocessor = PreprocessorAgent()
         self.parser = ParserAgent()
         self.summarizer = SummarizerAgent()
         self.planner = PlannerAgent()
@@ -29,8 +31,11 @@ class AutoPosterPipeline:
             document_name=doc_name
         )
         
+        system_logger.info("=== PHASE 0: GLOBAL PRE-COMPRESSION ===")
+        processed_filepath = await self.preprocessor.compress_document(input_filepath)
+
         system_logger.info("=== PHASE 1: PARSING DOCUMENT ===")
-        state.cards = self.parser.parse_markdown(input_filepath)
+        state.cards = await self.parser.parse_markdown(processed_filepath)
         
         system_logger.info("=== PHASE 1.5: SUMMARIZING LONG TEXTS ===")
         await self.summarizer.execute_summary(state)
@@ -46,7 +51,7 @@ class AutoPosterPipeline:
             
             await self.planner.plan_layout(state)
             
-            col_heights_dict = apply_constrained_layout(
+            layout_metrics = apply_constrained_layout(
                 cards=state.cards, 
                 canvas_width=self.renderer.viewport_width, 
                 canvas_height=self.renderer.viewport_height
@@ -54,6 +59,20 @@ class AutoPosterPipeline:
             
             debug_img_path = await self.renderer.render_poster(state, is_debug=True)
             is_perfect = await self.critic.evaluate_layout(state, debug_img_path)
+            
+            # --- Inject Layout Mathematical Violations ---
+            col_heights_dict = layout_metrics.get("heights", {})
+            squashed_cards = layout_metrics.get("squashed_cards", [])
+            
+            if squashed_cards:
+                is_perfect = False
+                if not state.latest_feedback:
+                    state.latest_feedback = {"issues": []}
+                for sid in squashed_cards:
+                    state.latest_feedback["issues"].append({
+                        "card_id": sid,
+                        "description": "Image spatial equilibrium violated. Clip compensation required to preserve legibility."
+                    })
             
             # --- Aesthetic & Structural Loss Calculation ---
             current_issues = len(state.latest_feedback.get("issues", [])) if state.latest_feedback else 0

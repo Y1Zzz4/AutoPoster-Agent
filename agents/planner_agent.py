@@ -22,23 +22,24 @@ class PlannerAgent:
         ]
 
         system_prompt = (
-            "You are an expert academic poster designer. Your ONLY task is to determine the "
+            "You are an expert academic poster Art Director. Your task is to determine the "
             "spatial importance (weight_multiplier) for each semantic card.\n\n"
             "Rules:\n"
             "1. Output strictly valid JSON with a key 'layout_plan' containing a list of objects.\n"
             "2. Each object MUST have 'card_id', 'reasoning', and 'weight_multiplier' (float, default 1.0).\n"
             "3. DO NOT change the original sequence. The academic flow MUST be preserved.\n"
-            "4. Assign higher multipliers (1.5 to 2.5) to core sections like 'Methodology' or 'Results' "
-            "so they receive more physical canvas space."
+            "4. You will receive feedback from the Scientific Editor and Layout Engine. "
+            "If feedback says 'Increase weight' or 'Image clipped', output a multiplier > 1.0 (e.g., 1.5). "
+            "If feedback says 'Decrease weight' or 'Takes up too much space', output a multiplier < 1.0 (e.g., 0.7)."
         )
 
         user_prompt = f"Here are the semantic cards:\n{json.dumps(cards_data, indent=2)}\n"
 
         if state.current_iteration > 0 and state.latest_feedback:
             user_prompt += (
-                f"\nCRITICAL FEEDBACK from previous iteration:\n"
+                f"\nCRITICAL EDITORIAL & LAYOUT FEEDBACK from previous iteration:\n"
                 f"{json.dumps(state.latest_feedback, indent=2)}\n"
-                "Adjust 'weight_multiplier' to fix visual errors (e.g., increase multiplier if text overflows)."
+                "Adjust 'weight_multiplier' specifically to resolve these issues."
             )
 
         try:
