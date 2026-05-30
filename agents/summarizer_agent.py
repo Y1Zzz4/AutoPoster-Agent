@@ -1,11 +1,11 @@
-import json
+import math
 from core.state_context import SystemState
 from utils.api_client import api_client
 from utils.logger import system_logger
 
 class SummarizerAgent:
     """
-    Compresses long academic text blocks within Semantic Cards.
+    Handles both initial long-text compression and dynamic overflow compression.
     """
     def __init__(self):
         self.llm = api_client.planner_client
@@ -13,8 +13,7 @@ class SummarizerAgent:
 
     async def execute_summary(self, state: SystemState) -> None:
         """
-        Iterates through cards and their respective blocks. 
-        Summarizes overly long text blocks into HTML lists.
+        Initial pass: Compresses excessively long academic text blocks into bullet points.
         """
         system_logger.info("SummarizerAgent evaluating text blocks for P2P conversion...")
         
@@ -49,10 +48,76 @@ class SummarizerAgent:
                     except Exception as e:
                         system_logger.error(f"Failed to summarize block in card {card.card_id}: {str(e)}")
             
-            # Recalculate the entire card's token_weight if any text was compressed
             if has_modified:
-                text_len = sum(len(b.content) for b in card.blocks if b.block_type == 'text')
-                img_count = sum(1 for b in card.blocks if b.block_type == 'image')
-                card.token_weight = max(text_len / 3.0, 10.0) + (img_count * 100.0)
+                self._recalculate_card_weight(card)
 
         system_logger.info("SummarizerAgent execution completed.")
+
+    async def compress_overflow_card(self, state: SystemState) -> list:
+        """
+        Dynamic pass: Triggered by CriticAgent when a card physically overflows its boundaries.
+        Returns a list of card IDs that were successfully compressed.
+        """
+        if not state.latest_feedback or "issues" not in state.latest_feedback:
+            return []
+
+        overflow_card_ids = set()
+        for issue in state.latest_feedback["issues"]:
+            desc = issue.get("description", "").lower()
+            if "overflow" in desc or "cut off" in desc or "clip" in desc:
+                c_id = issue.get("card_id")
+                if c_id and c_id != "unknown":
+                    overflow_card_ids.add(c_id)
+
+        if not overflow_card_ids:
+            return []
+
+        compressed_ids = []
+        for card in state.cards:
+            if card.card_id in overflow_card_ids:
+                text_blocks = [b for b in card.blocks if b.block_type == "text"]
+                if not text_blocks:
+                    continue
+
+                # Target the longest text block to maximize space recovery
+                target_block = max(text_blocks, key=lambda b: len(b.content))
+
+                sys_prompt = (
+                    "You are an academic editor. The current text overflows its physical poster container. "
+                    "Compress the provided text to reduce its total character length by at least 30%. "
+                    "Retain core metrics and mathematical formulas. "
+                    "Output ONLY the compressed text in HTML format (use <ul>/<li> or <p>)."
+                )
+
+                try:
+                    response = await self.llm.chat.completions.create(
+                        model=self.model_name,
+                        messages=[
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": target_block.content}
+                        ],
+                        temperature=0.1
+                    )
+                    target_block.content = response.choices[0].message.content.strip()
+                    compressed_ids.append(card.card_id)
+                    system_logger.info(f"Dynamically compressed overflowed text for card: {card.card_id}")
+                except Exception as e:
+                    system_logger.error(f"Dynamic compression failed for card {card.card_id}: {str(e)}")
+                    
+        return compressed_ids
+
+    def _recalculate_card_weight(self, card) -> None:
+        """
+        Mathematically synchronizes the token_weight with the Constrained Layout engine's 
+        Bottom-Up Rigid Modeling formula to prevent layout coordinate oscillations.
+        """
+        text_len = sum(len(b.content) for b in card.blocks if b.block_type == 'text')
+        img_count = sum(1 for b in card.blocks if b.block_type == 'image')
+        title_lines = math.ceil(len(card.title) / 25.0)
+        
+        est_text_h = math.ceil(text_len / 45.0) * 32.0
+        est_title_h = title_lines * 40.0
+        est_img_h = img_count * 380.0
+        
+        # 80.0 represents the strict padding_base defined in the layout engine
+        card.token_weight = 80.0 + est_title_h + est_text_h + est_img_h

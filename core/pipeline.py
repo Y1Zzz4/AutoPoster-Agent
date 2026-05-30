@@ -1,6 +1,6 @@
 import os
-from copy import deepcopy
-from core.state_context import SystemState, PosterCard
+import math
+from core.state_context import SystemState
 from agents.parser_agent import ParserAgent
 from agents.summarizer_agent import SummarizerAgent
 from agents.planner_agent import PlannerAgent
@@ -11,7 +11,8 @@ from utils.logger import system_logger
 
 class AutoPosterPipeline:
     """
-    The orchestrator managing the FSM, agentic interactions, and Checkpoint Rollbacks.
+    Orchestrates the Multi-Agent pipeline, managing FSM transitions, aesthetic loss functions, 
+    and dynamic semantic recovery.
     """
     def __init__(self):
         self.parser = ParserAgent()
@@ -34,11 +35,11 @@ class AutoPosterPipeline:
         system_logger.info("=== PHASE 1.5: SUMMARIZING LONG TEXTS ===")
         await self.summarizer.execute_summary(state)
         
-        system_logger.info("=== PHASE 2 & 3 & 4: PLANNING, RENDERING & REVIEW ===")
+        system_logger.info("=== PHASE 2, 3 & 4: PLANNING, RENDERING & REVIEW ===")
         
-        # [ANTI-OSCILLATION UPGRADE]: Track the best state to prevent reverse optimization
         min_loss = float('inf')
         best_cards_snapshot = []
+        state.is_converged = False 
         
         while state.current_iteration < state.max_iterations:
             system_logger.info(f"--- Iteration {state.current_iteration + 1}/{state.max_iterations} ---")
@@ -52,55 +53,48 @@ class AutoPosterPipeline:
             )
             
             debug_img_path = await self.renderer.render_poster(state, is_debug=True)
-            is_perfect = await self.critic.review_poster(state, debug_img_path)
+            is_perfect = await self.critic.evaluate_layout(state, debug_img_path)
             
-            # --- Composite Loss Calculation ---
-            # 1. Hard Constraint Penalty (Visual Issues)
+            # --- Aesthetic & Structural Loss Calculation ---
             current_issues = len(state.latest_feedback.get("issues", [])) if state.latest_feedback else 0
-            
-            # 2. Soft Constraint Penalty (Aesthetic Variance)
             heights = list(col_heights_dict.values())
-            if heights:
-                mean_h = sum(heights) / len(heights)
-                variance = sum((h - mean_h) ** 2 for h in heights) / len(heights)
-            else:
-                variance = 0
-                
-            # Total Loss = Issue Penalty (Massive) + Imbalance Penalty (Minor)
-            # This ensures 0-issue layouts always beat 1-issue layouts, 
-            # but among 0-issue layouts, the most visually balanced one wins.
+            variance = sum((h - sum(heights)/len(heights))**2 for h in heights) / len(heights) if heights else 0
             total_loss = (current_issues * 100000) + variance
-            
-            system_logger.info(f"Iteration Loss: {total_loss:.2f} (Issues: {current_issues}, Variance: {variance:.2f})")
             
             if total_loss < min_loss:
                 min_loss = total_loss
                 best_cards_snapshot = [card.model_copy(deep=True) for card in state.cards]
-                system_logger.info(">>> New Best Checkpoint Saved!")
+                system_logger.info(f"Checkpoint Saved: Best state updated (Loss: {total_loss:.2f})")
             
-            if is_perfect and variance < 5000: # Threshold for "good enough" balance
-                system_logger.info("Pipeline Converged! Layout is perfectly balanced.")
+            if is_perfect:
+                state.is_converged = True 
                 break
                 
+            # --- Dynamic Semantic Compression Hook ---
+            issues = state.latest_feedback.get("issues", []) if state.latest_feedback else []
+            has_overflow = any("overflow" in i.get("description", "").lower() or "clip" in i.get("description", "").lower() for i in issues)
+            
+            if has_overflow:
+                system_logger.info("Overflow detected. Triggering semantic compression on specific cards.")
+                compressed_ids = await self.summarizer.compress_overflow_card(state)
+                
+                # Resynchronize physical weight only for the modified cards
+                if compressed_ids:
+                    for card in state.cards:
+                        if card.card_id in compressed_ids:
+                            self.summarizer._recalculate_card_weight(card)
+                            
             state.current_iteration += 1
             
-        # --- Fallback & Rollback ---
-        if not state.is_converged:
-            system_logger.warning(f"Max iterations reached. Rolling back to best state (Issues: {min_loss}).")
+        # --- CONCLUSION LOGIC ---
+        if state.is_converged:
+            system_logger.info("Pipeline Converged: Layout finalized successfully without critical issues.")
+        else:
+            system_logger.warning(f"Max iterations reached. Rolling back to best iteration (Best Loss: {min_loss:.2f}).")
             state.is_fallback_triggered = True
-            
-            # Rollback to the best snapshot
             if best_cards_snapshot:
                 state.cards = best_cards_snapshot
-                # Recalculate coordinates just to ensure the renderer gets perfectly synced data
-                apply_constrained_layout(
-                    cards=state.cards, 
-                    canvas_width=self.renderer.viewport_width, 
-                    canvas_height=self.renderer.viewport_height
-                )
+                apply_constrained_layout(state.cards, self.renderer.viewport_width, self.renderer.viewport_height)
 
-        # === FINAL PHASE ===
         system_logger.info("=== FINAL PHASE: RENDERING CLEAN POSTER ===")
-        final_poster_path = await self.renderer.render_poster(state, is_debug=False)
-        
-        return final_poster_path
+        return await self.renderer.render_poster(state, is_debug=False)

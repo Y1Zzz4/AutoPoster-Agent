@@ -60,7 +60,7 @@ class PlannerAgent:
 
     def _apply_plan_to_state(self, plan_json: Dict[str, Any], state: SystemState) -> None:
         """
-        In-place Mapping
+        Updates card weights in-place with strict anti-erosion clamping.
         """
         layout_list = plan_json.get("layout_plan", [])
         
@@ -71,4 +71,8 @@ class PlannerAgent:
 
         for card in state.cards:
             if card.card_id in multiplier_map:
-                card.token_weight *= multiplier_map[card.card_id]
+                multiplier = multiplier_map[card.card_id]
+                
+                clamped_multiplier = max(0.5, min(multiplier, 2.0)) 
+                
+                card.token_weight = max(card.token_weight * clamped_multiplier, 80.0)
