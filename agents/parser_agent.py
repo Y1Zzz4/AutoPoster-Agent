@@ -1,7 +1,7 @@
 import os
 from typing import List
 from markdown_it import MarkdownIt
-from core.state_context import ContentBlock
+from core.state_context import ContentBlock,PosterCard
 from utils.logger import system_logger
 from pathlib import Path
 import base64
@@ -78,7 +78,7 @@ class ParserAgent:
             
         return f"data:{mime_type};base64,{encoded_string}"
     
-    def parse_markdown(self, filepath: str) -> List[ContentBlock]:
+    def parse_markdown(self, filepath: str) -> List[PosterCard]:
         """
         Main pipeline to parse a markdown file.
         """
@@ -90,51 +90,65 @@ class ParserAgent:
             raw_text = file.read()
 
         tokens = self.md.parse(raw_text)
-        blocks: List[ContentBlock] = []
+        
+        cards: List[PosterCard] = []
+        current_card = PosterCard(title="Header") # 默认创建 Header 卡片
         current_text_buffer = ""
         
         for token in tokens:
-            if token.type == "inline" and token.children:
+            # 1. 遇到新的 Heading，立刻结算旧卡片，创建新卡片
+            if token.type == "heading_open":
+                if current_text_buffer.strip():
+                    current_card.blocks.append(ContentBlock(block_type="text", content=current_text_buffer.strip()))
+                    current_text_buffer = ""
+                
+                # 如果当前卡片非空，装入列表
+                if current_card.blocks or current_card.title == "Header":
+                    # 粗略估算卡片权重 (文字越长、图片越多，权重越大)
+                    text_len = sum(len(b.content) for b in current_card.blocks if b.block_type == 'text')
+                    img_count = sum(1 for b in current_card.blocks if b.block_type == 'image')
+                    current_card.token_weight = max(text_len / 3.0, 10.0) + (img_count * 100.0)
+                    cards.append(current_card)
+                
+                # 开启新卡片
+                current_card = PosterCard(title="New Section") # 标题将在后续 text 节点中被覆盖
+
+            # 2. 捕获标题内容
+            elif token.type == "text" and tokens[tokens.index(token)-1].type == "heading_open":
+                current_card.title = token.content
+
+            # 3. 处理图片与文字
+            elif token.type == "inline" and token.children:
                 for child in token.children:
                     if child.type == "image":
+                        # 遇到图片前，先清空并存入当前积累的文字
                         if current_text_buffer.strip():
-                            blocks.append(self._create_text_block(current_text_buffer))
+                            current_card.blocks.append(ContentBlock(block_type="text", content=current_text_buffer.strip()))
                             current_text_buffer = "" 
                             
                         raw_image_src = child.attrGet("src")
                         base64_src = self._encode_local_image(raw_image_src, filepath)
-                        
                         if base64_src:
-                            blocks.append(ContentBlock(
-                                block_type="image",
-                                content=base64_src,
-                                token_weight=150.0 
-                            ))
+                            # [核心突破]：图片直接作为 Block 塞入当前正在处理的语义卡片中！
+                            current_card.blocks.append(ContentBlock(block_type="image", content=base64_src))
                             
                     elif child.type in ["text", "code_inline"]:
-                        current_text_buffer += child.content
+                        # 排除标题文本，防止重复
+                        if not (tokens[tokens.index(token)-1].type == "heading_open"):
+                            current_text_buffer += child.content
 
-            elif token.type == "heading_open":
-                if token.tag == "h1":
-                    current_text_buffer += "<h1 class='main-poster-title'>"
-                else:
-                    current_text_buffer += f"<{token.tag} class='section-title'>"
+            elif token.type in ["paragraph_close"]:
+                current_text_buffer += "\n\n"
 
-            elif token.type == "heading_close":
-                current_text_buffer += f"</{token.tag}>\n"
-
-            elif token.type == "paragraph_open":
-                current_text_buffer += "<p class='content-text'>"
-
-            elif token.type == "paragraph_close":
-                current_text_buffer += "</p>\n"
-
-            elif token.type in ["text", "code_inline"]:
-                current_text_buffer += token.content
-
+        # 结算最后一张卡片
         if current_text_buffer.strip():
-            blocks.append(self._create_text_block(current_text_buffer))
+            current_card.blocks.append(ContentBlock(block_type="text", content=current_text_buffer.strip()))
+        if current_card.blocks:
+            text_len = sum(len(b.content) for b in current_card.blocks if b.block_type == 'text')
+            img_count = sum(1 for b in current_card.blocks if b.block_type == 'image')
+            current_card.token_weight = max(text_len / 3.0, 10.0) + (img_count * 100.0)
+            cards.append(current_card)
 
-        return blocks
+        return cards
 
     
