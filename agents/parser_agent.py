@@ -1,73 +1,49 @@
 import os
-from typing import List
-from markdown_it import MarkdownIt
-from core.state_context import ContentBlock,PosterCard
-from utils.logger import system_logger
-from pathlib import Path
 import base64
 import mimetypes
 import urllib.parse
+from pathlib import Path
+from typing import List
+from markdown_it import MarkdownIt
+from core.state_context import ContentBlock, PosterCard
+from utils.logger import system_logger
 
 class ParserAgent:
     """
-    ParserAgent is responsible for reading source documents (Markdown format),
-    parsing their Abstract Syntax Tree (AST), and chunking them into structured ContentBlocks.
+    ParserAgent parses the AST of a Markdown document and chunks it into Semantic PosterCards.
+    Assumes inputs are self-contained folders (MD file + relative image assets) or Web URLs.
     """
     
     def __init__(self):
-        # Initialize the markdown-it parser
-        # markdown-it is chosen for its strict CommonMark compliance and detailed AST generation.
         self.md = MarkdownIt()
-        system_logger.info("ParserAgent initialized successfully.")
-    def _create_text_block(self, text: str) -> ContentBlock:
-            """
-            Helper method to encapsulate text into a ContentBlock and calculate its token weight.
-            """
-            cleaned_text = text.strip()
-            
-            # Mathematical approximation of token weight:
-            # Assuming 1 LLM Token ~= 4 English characters or ~1.5 Chinese characters.
-            # We use a base division of 3.0 to estimate the spatial weight this text will occupy.
-            # The max(..., 10.0) ensures that even a very short title gets a minimum bounding box.
-            estimated_weight = max(len(cleaned_text) / 3.0, 10.0)
-            
-            return ContentBlock(
-                block_type="text",
-                content=cleaned_text,
-                token_weight=estimated_weight
-            )
-        
+        system_logger.info("ParserAgent initialized.")
+
     def _encode_local_image(self, image_path: str, md_filepath: str) -> str:
         """
-        Robust local image encoder. Resolves complex absolute/relative paths and URI encodings.
+        Encodes images by resolving relative paths strictly against the MD file's directory.
+        
+        Args:
+            image_path (str): The raw path parsed from the markdown AST.
+            md_filepath (str): The absolute path of the source markdown file.
+            
+        Returns:
+            str: Base64 encoded Data URI scheme.
         """
-        # 1. Pass through web links and existing base64 strings
         if image_path.startswith(('http://', 'https://', 'data:')):
             return image_path
             
-        # 2. Decode URI components (e.g., "%20" to " ")
         clean_path = urllib.parse.unquote(image_path)
         
-        # Strip 'file://' protocol if present to prevent Pathlib parsing errors
         if clean_path.startswith('file:///'):
-            clean_path = clean_path[8:] # Strip 'file:///'
+            clean_path = clean_path[8:]
         elif clean_path.startswith('file://'):
             clean_path = clean_path[7:]
 
-        # 3. Use robust pathlib to determine path type
-        p = Path(clean_path)
-        if p.is_absolute():
-            target_path = p
-        else:
-            # If relative, anchor it to the markdown file's directory
-            md_dir = Path(md_filepath).parent
-            target_path = md_dir / p
-            
-        # Resolve to clean absolute path, removing any '../'
-        target_path = target_path.resolve()
+        md_dir = Path(md_filepath).parent
+        target_path = (md_dir / clean_path).resolve()
         
         if not target_path.exists():
-            system_logger.warning(f"Local image not found at resolved path: {target_path}")
+            system_logger.warning(f"Image missing in document folder: {target_path}")
             return ""
             
         mime_type, _ = mimetypes.guess_type(str(target_path))
@@ -77,10 +53,17 @@ class ParserAgent:
             encoded_string = base64.b64encode(img_file.read()).decode('utf-8')
             
         return f"data:{mime_type};base64,{encoded_string}"
-    
+
     def parse_markdown(self, filepath: str) -> List[PosterCard]:
         """
-        Main pipeline to parse a markdown file.
+        Parses a markdown file into a series of semantic PosterCards based on structural headings.
+        Calculates initial token_weight using a Natural Height Estimation algorithm.
+        
+        Args:
+            filepath (str): Absolute path to the source markdown file.
+            
+        Returns:
+            List[PosterCard]: A structured list of segmented academic sections.
         """
         if not os.path.exists(filepath):
             system_logger.error(f"Input file missing: {filepath}")
@@ -92,36 +75,48 @@ class ParserAgent:
         tokens = self.md.parse(raw_text)
         
         cards: List[PosterCard] = []
-        current_card = PosterCard(title="Header") # 默认创建 Header 卡片
+        current_card = PosterCard(title="") 
         current_text_buffer = ""
+        is_inside_heading = False 
         
         for token in tokens:
-            # 1. 遇到新的 Heading，立刻结算旧卡片，创建新卡片
+            # --- 1. Encountering a Heading Open Token ---
             if token.type == "heading_open":
+                is_inside_heading = True
+                
+                # Flush existing text buffer into the previous card before sealing it
                 if current_text_buffer.strip():
                     current_card.blocks.append(ContentBlock(block_type="text", content=current_text_buffer.strip()))
                     current_text_buffer = ""
                 
-                # 如果当前卡片非空，装入列表
-                if current_card.blocks or current_card.title == "Header":
-                    # 粗略估算卡片权重 (文字越长、图片越多，权重越大)
+                # If the card has a valid title string or content, archive it.
+                if current_card.title.strip() or current_card.blocks:
                     text_len = sum(len(b.content) for b in current_card.blocks if b.block_type == 'text')
                     img_count = sum(1 for b in current_card.blocks if b.block_type == 'image')
-                    current_card.token_weight = max(text_len / 3.0, 10.0) + (img_count * 100.0)
+                    
+                    # [UPDATE]: Natural Height Estimation
+                    # Base padding=100px, 1 char ~ 0.8px height, 1 image ~ 350px height
+                    current_card.token_weight = 100.0 + (text_len * 0.8) + (img_count * 350.0)
+                    
                     cards.append(current_card)
                 
-                # 开启新卡片
-                current_card = PosterCard(title="New Section") # 标题将在后续 text 节点中被覆盖
+                # Instantiate a clean card to capture the upcoming heading title
+                current_card = PosterCard(title="") 
 
-            # 2. 捕获标题内容
-            elif token.type == "text" and tokens[tokens.index(token)-1].type == "heading_open":
+            # --- 2. Extracting Heading Inner Text ---
+            elif token.type == "inline" and is_inside_heading:
                 current_card.title = token.content
 
-            # 3. 处理图片与文字
-            elif token.type == "inline" and token.children:
+            # --- 3. Heading Close Token ---
+            elif token.type == "heading_close":
+                is_inside_heading = False
+                if not current_card.title.strip():
+                    current_card.title = "Section"
+
+            # --- 4. Processing Body Text and Media Blocks ---
+            elif token.type == "inline" and not is_inside_heading and token.children:
                 for child in token.children:
                     if child.type == "image":
-                        # 遇到图片前，先清空并存入当前积累的文字
                         if current_text_buffer.strip():
                             current_card.blocks.append(ContentBlock(block_type="text", content=current_text_buffer.strip()))
                             current_text_buffer = "" 
@@ -129,26 +124,25 @@ class ParserAgent:
                         raw_image_src = child.attrGet("src")
                         base64_src = self._encode_local_image(raw_image_src, filepath)
                         if base64_src:
-                            # [核心突破]：图片直接作为 Block 塞入当前正在处理的语义卡片中！
                             current_card.blocks.append(ContentBlock(block_type="image", content=base64_src))
                             
                     elif child.type in ["text", "code_inline"]:
-                        # 排除标题文本，防止重复
-                        if not (tokens[tokens.index(token)-1].type == "heading_open"):
-                            current_text_buffer += child.content
+                        current_text_buffer += child.content
 
             elif token.type in ["paragraph_close"]:
                 current_text_buffer += "\n\n"
 
-        # 结算最后一张卡片
+        # --- Final Card Settlement (EOF) ---
         if current_text_buffer.strip():
             current_card.blocks.append(ContentBlock(block_type="text", content=current_text_buffer.strip()))
-        if current_card.blocks:
+            
+        if current_card.title.strip() or current_card.blocks:
             text_len = sum(len(b.content) for b in current_card.blocks if b.block_type == 'text')
             img_count = sum(1 for b in current_card.blocks if b.block_type == 'image')
-            current_card.token_weight = max(text_len / 3.0, 10.0) + (img_count * 100.0)
+            
+            # [UPDATE]: Natural Height Estimation for the last card
+            current_card.token_weight = 100.0 + (text_len * 0.8) + (img_count * 350.0)
+            
             cards.append(current_card)
 
         return cards
-
-    

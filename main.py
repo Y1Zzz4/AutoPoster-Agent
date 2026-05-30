@@ -16,7 +16,7 @@ async def main():
     parser.add_argument(
         "-i", "--input", 
         type=str, 
-        default="sample_paper.md", 
+        default="sample_paper/sample_paper.md", 
         help="The name of the markdown file located in the assets/inputs/ directory."
     )
     

@@ -1,59 +1,93 @@
 from typing import List
 from core.state_context import PosterCard
 
-def apply_constrained_layout(cards: List[PosterCard], canvas_width: float, canvas_height: float) -> None:
+def apply_constrained_layout(cards: List[PosterCard], canvas_width: float, canvas_height: float) -> dict:
     """
-    [P2P Greedy Masonry Algorithm]
-    Dynamically balances cards across 3 columns to prevent empty spaces.
+    Applies Locked-Column Layout & Natural Height Downscaling.
+    Returns a dictionary of the actual heights of each column for aesthetic evaluation.
     """
-    header_h = canvas_height * 0.12
-    col_w = canvas_width / 3.0
-    margin = 25.0
-    
-    # Track the current Y-coordinate (height) of each column
-    col_heights = {
-        "left_col": header_h,
-        "mid_col": header_h,
-        "right_col": header_h
-    }
-    
-    col_x_offsets = {
-        "left_col": 0.0,
-        "mid_col": col_w,
-        "right_col": col_w * 2
-    }
-    
-    # 1. 强制放置 Header
+    if not cards:
+        return {}
+
+    # --- 1. Header Logic ---
     header_card = cards[0]
+    title_length = len(header_card.title)
+    
+    # Give the header breathing room based on title length
+    extra_ratio = max(0, (title_length - 40) // 30) * 0.05
+    header_ratio = min(0.12 + extra_ratio, 0.22)
+    header_h = canvas_height * header_ratio
+    
     header_card.zone_id = "header"
+    header_card.is_zone_locked = True
     header_card.coordinates = [0.0, 0.0, canvas_width, header_h]
     
-    # 2. 瀑布流分配其余卡片
     body_cards = cards[1:]
-    # Calculate a global weight-to-pixel ratio to determine raw card heights
-    total_weight = sum(c.token_weight for c in body_cards)
-    usable_total_height = (canvas_height - header_h) * 3.0 # 3 columns of usable space
+    if not body_cards:
+        return {}
+
+    # --- 2. Zone Assignment (Executed ONLY on Iteration 0) ---
+    buckets = {"left_col": [], "mid_col": [], "right_col": []}
     
-    for card in body_cards:
-        # Find the currently shortest column
-        shortest_col = min(col_heights, key=col_heights.get)
+    if not any(c.is_zone_locked for c in body_cards):
+        # Initialization: Distribute cards sequentially based on raw pixel weight
+        total_weight = sum(c.token_weight for c in body_cards)
+        target_bucket_weight = total_weight / 3.0
         
-        # Calculate optimal height based on token ratio
-        card_h = (card.token_weight / total_weight) * usable_total_height if total_weight > 0 else 200.0
+        bucket_names = list(buckets.keys())
+        current_idx = 0
+        current_weight = 0.0
         
-        # Enforce minimum height to prevent overflow
-        card_h = max(card_h, 250.0)
+        for card in body_cards:
+            if current_idx < 2 and (current_weight + card.token_weight * 0.6) > target_bucket_weight:
+                current_idx += 1
+                current_weight = 0.0
+            
+            target_col = bucket_names[current_idx]
+            card.zone_id = target_col
+            card.is_zone_locked = True # Lock it permanently!
+            current_weight += card.token_weight
+            buckets[target_col].append(card)
+    else:
+        # Subsequent Iterations: Strictly follow locked zones
+        for card in body_cards:
+            # Fallback for safety
+            zone = card.zone_id if card.zone_id in buckets else "left_col"
+            buckets[zone].append(card)
+
+    # --- 3. Natural Height Calculation & Overflow Protection ---
+    col_w = canvas_width / 3.0
+    usable_col_h = canvas_height - header_h
+    margin = 25.0
+    
+    col_x_offsets = {"left_col": 0.0, "mid_col": col_w, "right_col": col_w * 2}
+    actual_col_heights = {"left_col": 0.0, "mid_col": 0.0, "right_col": 0.0}
+    
+    for col_name, col_cards in buckets.items():
+        if not col_cards:
+            continue
+            
+        zx = col_x_offsets[col_name]
+        current_y = header_h
         
-        zx = col_x_offsets[shortest_col]
-        zy = col_heights[shortest_col]
+        # Calculate raw requested height based on LLM multiplier
+        raw_total_h = sum(c.token_weight for c in col_cards)
         
-        card.zone_id = shortest_col
-        card.coordinates = [
-            zx + margin, 
-            zy + margin, 
-            col_w - 2 * margin, 
-            card_h - 2 * margin
-        ]
+        # Scale down ONLY if the column overflows the canvas. 
+        # If it's shorter, scale_factor = 1.0 (prevents massive whitespace inside cards)
+        scale_factor = usable_col_h / raw_total_h if raw_total_h > usable_col_h else 1.0
         
-        # Update the column's height
-        col_heights[shortest_col] += card_h
+        for card in col_cards:
+            final_h = card.token_weight * scale_factor
+            
+            card.coordinates = [
+                zx + margin, 
+                current_y + margin, 
+                col_w - 2 * margin, 
+                final_h - 2 * margin
+            ]
+            current_y += final_h
+            actual_col_heights[col_name] += final_h
+
+    # Return heights to the Pipeline for aesthetic variance calculation
+    return actual_col_heights

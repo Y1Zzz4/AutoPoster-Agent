@@ -18,7 +18,8 @@ class PosterCard(BaseModel):
     
     # Card physical properties
     token_weight: float = Field(default=0.0)
-    zone_id: str = Field(default="left_col") # 'header', 'left_col', 'mid_col', 'right_col'
+    zone_id: str = Field(default="")
+    is_zone_locked: bool = Field(default=False)
     coordinates: Optional[List[float]] = Field(default=None)
 
 class SystemState(BaseModel):
