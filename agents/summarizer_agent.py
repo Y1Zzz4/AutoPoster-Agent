@@ -14,19 +14,23 @@ class SummarizerAgent:
 
     async def execute_summary(self, state: SystemState) -> None:
         """
-        Processes text blocks sequentially and updates their content in-place.
-        Leaves image blocks untouched.
+        Intelligently compresses long academic text. 
+        Threshold increased to 800 characters to preserve context.
         """
-        system_logger.info("SummarizerAgent started processing long text blocks.")
+        system_logger.info("SummarizerAgent evaluating text blocks for P2P conversion...")
         
         for block in state.content_blocks:
-            if block.block_type == "text" and len(block.content) > 300:
-                # Construct strict prompt for summarization
+            # [UPDATE]: Threshold raised to 800 chars (~150 words). 
+            # Only summarize truly overwhelming paragraphs.
+            if block.block_type == "text" and len(block.content) > 800:
                 sys_prompt = (
-                    "You are an academic editor preparing text for a research poster. "
-                    "Your objective is to condense the provided text to a maximum of 80 words. "
-                    "Retain all key mathematical formulas, metric percentages, and core methodologies. "
-                    "Use bullet points if it improves readability. Output ONLY the summarized text."
+                    "You are an academic editor creating a Paper-to-Poster (P2P) layout. "
+                    "Your objective is to condense the provided text into 3-4 highly readable bullet points. "
+                    "Rules: \n"
+                    "1. Preserve ALL mathematical metrics, percentages, and core methodologies.\n"
+                    "2. Total length must not exceed 100 words.\n"
+                    "3. Format the output STRICTLY as raw HTML using <ul> and <li> tags.\n"
+                    "Do NOT wrap the output in markdown code blocks."
                 )
                 
                 try:
@@ -36,14 +40,16 @@ class SummarizerAgent:
                             {"role": "system", "content": sys_prompt},
                             {"role": "user", "content": block.content}
                         ],
-                        temperature=0.2 
+                        temperature=0.1 
                     )
                     
-                    summarized_text = response.choices[0].message.content.strip()
+                    summarized_html = response.choices[0].message.content.strip()
                     
-                    # Update block state and recalculate its spatial weight
-                    block.content = summarized_text
-                    block.token_weight = max(len(summarized_text) / 3.0, 10.0)
+                    # Update content with HTML lists and adjust spatial weight
+                    block.content = summarized_html
+                    # Recalculate weight based on HTML tag density approximation
+                    block.token_weight = max(len(summarized_html) / 4.0, 15.0)
+                    system_logger.info(f"Summarized block {block.block_id} into bullet points.")
                     
                 except Exception as e:
                     system_logger.error(f"Failed to summarize block {block.block_id}: {str(e)}")

@@ -3,31 +3,29 @@ from core.state_context import ContentBlock
 
 def apply_constrained_layout(blocks: List[ContentBlock], canvas_width: float, canvas_height: float) -> None:
     """
-    Applies a strict academic poster template: Top Header (15%) + Two Vertical Columns (85%).
-    Blocks must be pre-assigned to 'header', 'left_col', or 'right_col' via PlannerAgent.
+    Applies a classic 3-column academic poster template (Landscape).
+    Top Header (12%) + Three Vertical Columns (88%).
     """
-    # 1. Define strict zone boundaries [x, y, w, h]
-    header_h = canvas_height * 0.15
-    col_w = canvas_width * 0.5
-    col_h = canvas_height * 0.85
+    header_h = canvas_height * 0.12
+    col_w = canvas_width / 3.0  # Divide canvas into 3 equal columns
+    col_h = canvas_height * 0.88
     
     zones = {
         "header": [0.0, 0.0, canvas_width, header_h],
         "left_col": [0.0, header_h, col_w, col_h],
-        "right_col": [col_w, header_h, col_w, col_h]
+        "mid_col": [col_w, header_h, col_w, col_h],
+        "right_col": [col_w * 2, header_h, col_w, col_h]
     }
     
-    # 2. Group blocks by their LLM-assigned zones
-    zone_blocks = {"header": [], "left_col": [], "right_col": []}
+    zone_blocks = {"header": [], "left_col": [], "mid_col": [], "right_col": []}
     
-    # Default fallback assignment if 'zone_id' is missing
     for block in blocks:
         target_zone = getattr(block, 'zone_id', 'left_col') 
-        if target_zone in zone_blocks:
-            zone_blocks[target_zone].append(block)
+        if target_zone not in zones: 
+            target_zone = 'left_col' # Fallback for hallucinated zones
+        zone_blocks[target_zone].append(block)
             
-    # 3. Apply 1D vertical stacking within each zone
-    margin = 20.0
+    margin = 25.0 # Slightly larger margin for landscape readability
     for zone_name, rect in zones.items():
         z_blocks = zone_blocks[zone_name]
         if not z_blocks:
@@ -38,10 +36,7 @@ def apply_constrained_layout(blocks: List[ContentBlock], canvas_width: float, ca
         current_y = zy
         
         for b in z_blocks:
-            # Calculate height proportional to block's token weight
             block_h = zh * (b.token_weight / total_weight) if total_weight > 0 else 0
-            
-            # Inject coordinates with margins applied
             b.coordinates = [
                 zx + margin, 
                 current_y + margin, 

@@ -16,8 +16,8 @@ class RendererEngine:
         self.template = self.env.get_template('poster_template.html')
         
         # Standard poster resolution (e.g., Vertical HD)
-        self.viewport_width = 1080
-        self.viewport_height = 1920
+        self.viewport_width = 1920
+        self.viewport_height = 1080
         
         # Ensure output directory exists
         self.base_output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'outputs')

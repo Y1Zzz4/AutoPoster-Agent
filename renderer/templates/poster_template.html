@@ -2,69 +2,91 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoPoster Render</title>
+    <title>P2P Academic Poster Render</title>
     <style>
-        /* Base Canvas Settings */
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #f4f4f9;
-            font-family: 'Helvetica Neue', Arial, sans-serif;
-            color: #333;
-        }
+        /* Base Canvas: Soft Gray-Blue Background */
+        body { margin: 0; padding: 0; background-color: #eef2f5; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
         
         .canvas {
             position: relative;
-            /* Dimensions typically fixed by playwright viewport */
-            width: 1080px; 
-            height: 1920px;
-            background-color: #ffffff;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            width: 1920px; 
+            height: 1080px;
             overflow: hidden;
         }
 
-        /* Generic block styling with absolute positioning */
+        /* THE P2P CARD STYLE
+           Replaces standard bounding boxes with modern academic cards.
+        */
         .content-block {
             position: absolute;
             box-sizing: border-box;
-            overflow: hidden;
-            padding: 10px;
+            background-color: #ffffff;
+            border-radius: 12px; /* Rounded corners */
+            box-shadow: 0 6px 16px rgba(0,0,0,0.06); /* Soft depth shadow */
+            padding: 25px 30px;
             display: flex;
-            align-items: center;
+            flex-direction: column;
+            justify-content: flex-start;
+            overflow: hidden;
+        }
+
+        /* Header Zone Exception: Full Bleed, Dark Academic Blue */
+        .content-block[data-zone="header"] {
+            background-color: #1a365d; 
+            color: #ffffff;
+            border-radius: 0;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            padding: 0 50px;
             justify-content: center;
+            text-align: center;
+            z-index: 10;
         }
 
-        /* Image specific styling to prevent stretching */
-        .content-block img {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
+        /* Typography */
+        .main-poster-title {
+            font-size: 3.5rem;
+            margin: 0 0 10px 0;
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: #ffffff;
         }
 
-        /* =========================================
-           DEBUG MODE STYLES 
-           不再使用 Jinja 破坏 CSS 语法，而是基于父级 Class 选择器
-           ========================================= */
-        
-        /* 只有当外层拥有 debug-mode 类时，内部的块才显示红色边框 */
-        .debug-mode .content-block {
-            border: 3px solid #ff0055 !important;
-            background-color: rgba(255, 0, 85, 0.05);
+        /* P2P Section Titles: Subtle underline instead of solid boxes */
+        .section-title {
+            color: #1a365d;
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-top: 0;
+            margin-bottom: 15px;
+            padding-bottom: 8px;
+            border-bottom: 3px solid #cbd5e1; /* Elegant divider line */
+            text-transform: uppercase;
         }
-        
-        /* Debug 水印的基础样式保持静态 */
-        .debug-badge {
-            position: absolute;
-            top: 0;
-            left: 0;
-            background-color: #ff0055;
-            color: white;
-            font-size: 14px;
-            font-weight: bold;
-            padding: 2px 6px;
-            z-index: 999;
+
+        /* Text & Bullet Points formatting */
+        .content-text {
+            font-size: 1.3rem;
+            line-height: 1.6;
+            text-align: justify;
+            color: #334155;
+            margin-top: 0;
         }
+
+        ul { margin-top: 5px; padding-left: 25px; }
+        li { font-size: 1.3rem; line-height: 1.5; color: #334155; margin-bottom: 8px;}
+
+        /* Image Handling */
+        .content-block img { 
+            max-width: 100%; 
+            max-height: 100%; 
+            object-fit: contain; 
+            margin: auto;
+            border-radius: 8px;
+        }
+
+        /* --- DEBUG MODE STYLES --- */
+        .debug-mode .content-block { border: 4px solid #ff0055 !important; }
+        .debug-badge { position: absolute; top: -4px; left: -4px; background-color: #ff0055; color: white; font-size: 16px; font-weight: bold; padding: 4px 8px; border-bottom-right-radius: 8px; z-index: 999; }
     </style>
 </head>
 <body class="{% if is_debug %}debug-mode{% endif %}">
@@ -73,22 +95,21 @@
             {% if block.coordinates %}
             <div class="content-block" 
                  id="{{ block.block_id }}"
-                 style="
-                    left: {{ block.coordinates[0] }}px; 
-                    top: {{ block.coordinates[1] }}px; 
-                    width: {{ block.coordinates[2] }}px; 
-                    height: {{ block.coordinates[3] }}px;
-                 ">
+                 data-zone="{{ block.zone_id }}"
+                 data-x="{{ block.coordinates[0] }}"
+                 data-y="{{ block.coordinates[1] }}"
+                 data-w="{{ block.coordinates[2] }}"
+                 data-h="{{ block.coordinates[3] }}">
                 
                 {% if is_debug %}
                     <div class="debug-badge">{{ block.block_id }}</div>
                 {% endif %}
 
                 {% if block.block_type == 'image' %}
-                    <img src="{{ block.content }}" alt="Block Image">
+                    <img src="{{ block.content }}" alt="Visual Content">
                 {% else %}
-                    <div style="font-size: 1.2rem; text-align: justify;">
-                        {{ block.content | replace('\n', '<br>') | safe }}
+                    <div style="width: 100%; height: 100%; overflow: hidden;">
+                        {{ block.content | safe }}
                     </div>
                 {% endif %}
 
@@ -96,5 +117,17 @@
             {% endif %}
         {% endfor %}
     </div>
+
+    <script>
+        // Apply spatial coordinates
+        document.querySelectorAll('.content-block').forEach(function(el) {
+            if (el.dataset.x) {
+                el.style.left = el.dataset.x + 'px';
+                el.style.top = el.dataset.y + 'px';
+                el.style.width = el.dataset.w + 'px';
+                el.style.height = el.dataset.h + 'px';
+            }
+        });
+    </script>
 </body>
 </html>

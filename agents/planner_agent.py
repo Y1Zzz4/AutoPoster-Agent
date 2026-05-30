@@ -44,9 +44,10 @@ class PlannerAgent:
             "1. Output strictly valid JSON with a key 'layout_plan' containing a list of objects.\n"
             "2. Each object MUST have 'block_id', 'zone_id', and 'weight_multiplier' (float, default 1.0).\n"
             "3. 'zone_id' MUST be exactly one of the following:\n"
-            "   - 'header': STRICTLY for the main Title and Authors.\n"
-            "   - 'left_col': For Abstract, Introduction, Methodology.\n"
-            "   - 'right_col': For Experimental Results, Images, Charts, Conclusion.\n"
+            "   - 'header': STRICTLY for the main Title (h1) and Authors.\n"
+            "   - 'left_col': For Abstract, Introduction.\n"
+            "   - 'mid_col': For Methodology, System Architecture, or main algorithms.\n"
+            "   - 'right_col': For Experimental Results, Charts, Conclusion.\n"
             "4. Keep related text and their corresponding images in the SAME 'zone_id' so they render together."
         )
 

@@ -3,8 +3,10 @@ from typing import List
 from markdown_it import MarkdownIt
 from core.state_context import ContentBlock
 from utils.logger import system_logger
+from pathlib import Path
 import base64
 import mimetypes
+import urllib.parse
 
 class ParserAgent:
     """
@@ -37,31 +39,43 @@ class ParserAgent:
         
     def _encode_local_image(self, image_path: str, md_filepath: str) -> str:
         """
-        Encode a local image file to a Base64 string for HTML rendering.
-            
-        Args:
-            image_path (str): The raw path parsed from the markdown AST.
-            md_filepath (str): The absolute path of the source markdown file.
-                
-        Returns:
-            str: Base64 encoded Data URI scheme.
+        Robust local image encoder. Resolves complex absolute/relative paths and URI encodings.
         """
-        if os.path.isabs(image_path):
-            target_path = image_path
-        else:
-            md_dir = os.path.dirname(os.path.abspath(md_filepath))
-            target_path = os.path.normpath(os.path.join(md_dir, image_path))
-                
-        if not os.path.exists(target_path):
-            system_logger.warning(f"Local image not found: {target_path}")
-            return ""
-                
-        mime_type, _ = mimetypes.guess_type(target_path)
-        mime_type = mime_type or 'image/png'
+        # 1. Pass through web links and existing base64 strings
+        if image_path.startswith(('http://', 'https://', 'data:')):
+            return image_path
             
+        # 2. Decode URI components (e.g., "%20" to " ")
+        clean_path = urllib.parse.unquote(image_path)
+        
+        # Strip 'file://' protocol if present to prevent Pathlib parsing errors
+        if clean_path.startswith('file:///'):
+            clean_path = clean_path[8:] # Strip 'file:///'
+        elif clean_path.startswith('file://'):
+            clean_path = clean_path[7:]
+
+        # 3. Use robust pathlib to determine path type
+        p = Path(clean_path)
+        if p.is_absolute():
+            target_path = p
+        else:
+            # If relative, anchor it to the markdown file's directory
+            md_dir = Path(md_filepath).parent
+            target_path = md_dir / p
+            
+        # Resolve to clean absolute path, removing any '../'
+        target_path = target_path.resolve()
+        
+        if not target_path.exists():
+            system_logger.warning(f"Local image not found at resolved path: {target_path}")
+            return ""
+            
+        mime_type, _ = mimetypes.guess_type(str(target_path))
+        mime_type = mime_type or 'image/png'
+        
         with open(target_path, "rb") as img_file:
             encoded_string = base64.b64encode(img_file.read()).decode('utf-8')
-                
+            
         return f"data:{mime_type};base64,{encoded_string}"
     
     def parse_markdown(self, filepath: str) -> List[ContentBlock]:
@@ -88,8 +102,6 @@ class ParserAgent:
                             current_text_buffer = "" 
                             
                         raw_image_src = child.attrGet("src")
-                        
-                        # 调用内部实例方法，此时 self 自动作为第一个参数隐式传递
                         base64_src = self._encode_local_image(raw_image_src, filepath)
                         
                         if base64_src:
@@ -98,16 +110,27 @@ class ParserAgent:
                                 content=base64_src,
                                 token_weight=150.0 
                             ))
-                            system_logger.info(f"Image extracted and encoded: {raw_image_src}")
                             
                     elif child.type in ["text", "code_inline"]:
                         current_text_buffer += child.content
 
+            elif token.type == "heading_open":
+                if token.tag == "h1":
+                    current_text_buffer += "<h1 class='main-poster-title'>"
+                else:
+                    current_text_buffer += f"<{token.tag} class='section-title'>"
+
+            elif token.type == "heading_close":
+                current_text_buffer += f"</{token.tag}>\n"
+
+            elif token.type == "paragraph_open":
+                current_text_buffer += "<p class='content-text'>"
+
+            elif token.type == "paragraph_close":
+                current_text_buffer += "</p>\n"
+
             elif token.type in ["text", "code_inline"]:
                 current_text_buffer += token.content
-                
-            elif token.type in ["paragraph_close", "heading_close"]:
-                current_text_buffer += "\n\n"
 
         if current_text_buffer.strip():
             blocks.append(self._create_text_block(current_text_buffer))
